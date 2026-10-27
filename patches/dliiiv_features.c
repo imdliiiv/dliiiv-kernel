@@ -21,14 +21,14 @@ static int torch_boost_level = 100;
 /* Show DLIIIV Kernel Branding Info */
 static ssize_t kernel_name_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-    return sprintf(buf, "DLIIIV Kernel for Nothing Phone (4a) Pro (froggerpro)\nBuild: Android 16 / GKI 6.6 (4KB Pages)\n");
+    return sysfs_emit(buf, "DLIIIV Kernel for Nothing Phone (4a) Pro (froggerpro)\nBuild: Android 16 / GKI 6.6 (4KB Pages)\n");
 }
 
 /* Bypass Charging: 1 = Battery charging halted, power drawn directly from charger (Idle Mode)
  *                   0 = Normal charging restored */
 static ssize_t bypass_charging_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%d\n", bypass_charging_active);
+    return sysfs_emit(buf, "%d\n", bypass_charging_active);
 }
 
 static ssize_t bypass_charging_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
@@ -50,9 +50,9 @@ static ssize_t bypass_charging_store(struct kobject *kobj, struct kobj_attribute
         psy = power_supply_get_by_name("bms");
 
     if (psy) {
-        /* When bypass is 1, CHARGING_ENABLED is set to 0 to enter battery idle mode */
+        /* When bypass is 1, set CHARGE_CONTROL_LIMIT to 0 (halt battery charge current) */
         pval.intval = bypass_charging_active ? 0 : 1;
-        power_supply_set_property(psy, POWER_SUPPLY_PROP_CHARGING_ENABLED, &pval);
+        power_supply_set_property(psy, POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT, &pval);
         power_supply_put(psy);
     }
 
@@ -63,7 +63,7 @@ static ssize_t bypass_charging_store(struct kobject *kobj, struct kobj_attribute
 /* Flashlight / Torch Boost Control */
 static ssize_t torch_boost_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%d\n", torch_boost_level);
+    return sysfs_emit(buf, "%d\n", torch_boost_level);
 }
 
 static ssize_t torch_boost_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
