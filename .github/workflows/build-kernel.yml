@@ -139,12 +139,10 @@ jobs:
           patch -p1 --forward < ../susfs/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
           cd ..
 
-          if [ -f susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ]; then
-            cd BakaSU
-            patch -p1 --forward < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-            cd ..
-          fi
-          echo "[+] SUSFS patches integrated."
+          # Note: BakaSU natively includes full SUSFS integration out-of-the-box.
+          # Applying 10_enable_susfs_for_ksu.patch would duplicate symbols (susfs_ksu_sid, etc.),
+          # so we only apply the kernel-side patch (50_add_susfs_in_gki-android15-6.6.patch) above.
+          echo "[+] SUSFS kernel-side infrastructure and BakaSU native hooks ready."
 
       - name: 🚀 Apply Curated Performance Optimizations
         if: ${{ inputs.include_perf_patches }}
@@ -235,6 +233,7 @@ jobs:
           tools/bazel build \
             --config=fast \
             --disk_cache=/tmp/bazel-cache \
+            --verbose_failures \
             //common:kernel_aarch64/Image
 
           find bazel-bin/common -name "Image" -exec cp {} $GITHUB_WORKSPACE/Image \;
