@@ -123,12 +123,15 @@ jobs:
           grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVERS_DIR/Kconfig" || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVERS_DIR/Kconfig"
 
           sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning Using BakaSU tree)/' BakaSU/kernel/Kbuild || true
-          sed -i '/susfs has NOT update with latest KernelSU source/,$d' BakaSU/kernel/tools/susfs_compat.mk 2>/dev/null || true
+          # Empty susfs_compat.mk so KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE is NOT defined.
+          # This keeps lines 209-648 in selinux_hide.c active and compiled!
+          echo "" > BakaSU/kernel/tools/susfs_compat.mk
 
-          # Hardfix SUSFS symbol linkage: ensure global export of my_write_context, my_write_access, my_setprocattr & preinit stubs
+          # Hardfix SUSFS symbol linkage: ensure global export of all required symbols
           TARGET_HIDE="BakaSU/kernel/feature/selinux_hide.c"
           perl -0777 -pi -e 's/#ifdef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE\s*#define __maybe_static\s*#else\s*#define __maybe_static static\s*#endif/#define __maybe_static/s' "$TARGET_HIDE"
-          sed -i 's/#define ksu_handle_selinux_setprocattr my_setprocattr/\/\* #define ksu_handle_selinux_setprocattr my_setprocattr \*\//' "$TARGET_HIDE"
+          sed -i 's/static ssize_t my_write_context(/ssize_t my_write_context(/' "$TARGET_HIDE"
+          sed -i 's/static ssize_t my_write_access(/ssize_t my_write_access(/' "$TARGET_HIDE"
           cat "$GITHUB_WORKSPACE/patches/susfs_bridge.c" >> "$TARGET_HIDE"
           echo "[+] BakaSU driver integrated and SUSFS bridge symbols installed."
 
