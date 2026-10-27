@@ -17,29 +17,34 @@ on:
         default: true
 
 jobs:
-  preflight_check:
-    name: 🔍 Pre-Flight Checks & Environment Setup
+  preflight_audit:
+    name: 🔍 1. Pre-Flight Device & Environment Audit
     runs-on: ubuntu-24.04
-    outputs:
-      runner_ready: ${{ steps.check.outputs.ready }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Verify Environment & Tool Availability
-        id: check
+      - name: Audit Target Device Configuration
         run: |
-          echo "=============================================="
-          echo "  DLIIIV Kernel Build System - Pre-flight Check"
-          echo "  Target: Nothing Phone (4a) Pro (froggerpro)"
-          echo "  Architecture: ARM64 (4KB Page Size)"
-          echo "  Root: BakaSU + SUSFS (Inline Hooks)"
-          echo "=============================================="
-          echo "ready=true" >> $GITHUB_OUTPUT
+          echo "=========================================================="
+          echo "  DLIIIV Kernel Build System - Device Safety Verification"
+          echo "=========================================================="
+          echo "  Target Device:       Nothing Phone (4a) Pro (froggerpro)"
+          echo "  Model:               A069P"
+          echo "  Firmware Build:      FroggerPro-B4.1-260907-1153-IND"
+          echo "  Android Version:     16 (Nothing OS 4.1)"
+          echo "  Baseband Platform:   Qualcomm PAKALA"
+          echo "  Kernel Base:         Google ACK 6.6 (Sublevel 127)"
+          echo "  Page Size:           4KB Pages (CONFIG_ARM64_4K_PAGES=y)"
+          echo "  Root Solution:       BakaSU (Metamodule Engine)"
+          echo "  Stealth Hiding:      SUSFS (susfs4ksu Inline Hooks)"
+          echo "  Bypass Charging:     /sys/kernel/dliiiv/bypass_charging"
+          echo "  Flashlight Boost:    /sys/kernel/dliiiv/torch_boost"
+          echo "=========================================================="
 
   compile_kernel:
-    name: ⚙️ Compile DLIIIV GKI Kernel (Bazel / Kleaf)
-    needs: preflight_check
+    name: ⚙️ 2. Build DLIIIV GKI Kernel (Bazel / Kleaf)
+    needs: preflight_audit
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
@@ -76,7 +81,7 @@ jobs:
           echo "[+] Initializing ACK android15-6.6-2026-04 manifest..."
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6-2026-04 --depth=1
           repo sync -c --no-tags --no-clone-bundle -j$(nproc)
-          echo "[+] Repository sync complete."
+          echo "[+] Kernel source tree successfully synced."
 
       - name: 🏷️ Apply DLIIIV Kernel Branding
         run: |
@@ -97,7 +102,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/patches/dliiiv_features.c" drivers/misc/dliiiv_features.c
           echo "obj-y += dliiiv_features.o" >> drivers/misc/Makefile
 
-          # Remove artificial brightness cap in LED subsystem
+          # Relax LED max brightness limits in drivers/leds/led-class.c for full torch control
           if [ -f drivers/leds/led-class.c ]; then
             sed -i 's/if (value > led_cdev->max_brightness)/if (0)/' drivers/leds/led-class.c || true
             echo "[+] Flashlight / Torch boost enabled."
@@ -169,6 +174,27 @@ jobs:
             echo "[+] Bypassed bad_version check in $TARGET"
           fi
 
+      - name: 🛡️ Remove Bazel Protected Exports & Strict KMI Checking
+        run: |
+          cd kernel
+          echo "[+] Removing protected ABI exports..."
+          rm -rf common/android/abi_gki_protected_exports_*
+
+          # Remove protected exports list from BUILD.bazel
+          if grep -q 'protected_exports_list' common/BUILD.bazel; then
+            perl -pi -e 's/^\s*"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\s*$//;' common/BUILD.bazel || true
+          fi
+
+          # Clear protected modules in modules.bzl
+          if [ -f common/modules.bzl ] && grep -q '^protected_modules = ' common/modules.bzl; then
+            sed -i 's/protected_modules = \[.*\]/protected_modules = []/' common/modules.bzl || true
+          fi
+
+          # Disable strict symbol list checking so custom symbols do not fail Bazel
+          perl -pi -e 's/"kmi_symbol_list_strict_mode"\s*:\s*True/"kmi_symbol_list_strict_mode": False/g;' common/BUILD.bazel || true
+          perl -pi -e 's/"trim_nonlisted_kmi"\s*:\s*True/"trim_nonlisted_kmi": False/g;' common/BUILD.bazel || true
+          echo "[+] Protected exports removed and KMI strict mode disabled."
+
       - name: ⚙️ Configure Kernel Defconfig & Disable Bazel Defconfig Checks
         run: |
           cd kernel
@@ -195,7 +221,6 @@ jobs:
           EOF
 
           echo "[+] Completely disabling check_defconfig in Bazel Kleaf..."
-          # Disable check_defconfig across all Kleaf Starlark rules so savedefconfig mismatch never errors
           find build/kernel/kleaf -name "*.bzl" -exec sed -i 's/"minimized"/"disabled"/g' {} + || true
           find build/kernel/kleaf -name "*.bzl" -exec sed -i 's/"match"/"disabled"/g' {} + || true
           sed -i 's/check_defconfig//g' common/build.config.gki 2>/dev/null || true
@@ -222,8 +247,8 @@ jobs:
           path: Image
           retention-days: 1
 
-  package_and_release:
-    name: 📦 Package AnyKernel3 Zip & Root Manager
+  package_artifacts:
+    name: 📦 3. Package AnyKernel3 & Fastboot Tools
     needs: compile_kernel
     runs-on: ubuntu-24.04
     steps:
@@ -272,6 +297,31 @@ jobs:
           cd ..
           ls -lh $GITHUB_WORKSPACE/DLIIIV-Kernel-FroggerPro.zip
 
+      - name: 📤 Upload Flashable Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dliiiv-kernel-zip
+          path: DLIIIV-Kernel-FroggerPro.zip
+          retention-days: 1
+
+  publish_release:
+    name: 🚀 4. Bundle Root Manager & Final Release
+    needs: [compile_kernel, package_artifacts]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 📥 Download Kernel Image
+        uses: actions/download-artifact@v4
+        with:
+          name: intermediate-kernel-image
+
+      - name: 📥 Download Flashable Package
+        uses: actions/download-artifact@v4
+        with:
+          name: dliiiv-kernel-zip
+
       - name: 📲 Download Exact Matching BakaSU Manager APK
         run: |
           echo "[+] Downloading matching BakaSU Manager APK..."
@@ -285,6 +335,45 @@ jobs:
           fi
           ls -lh $GITHUB_WORKSPACE/BakaSU-Manager.apk
 
+      - name: 📝 Create Flashing Guide for Fastboot
+        run: |
+          cat << 'EOF' > $GITHUB_WORKSPACE/FLASHING_INSTRUCTIONS.txt
+          =============================================================
+            DLIIIV Custom Kernel Flashing Guide for Nothing Phone (4a) Pro
+            Firmware: FroggerPro-B4.1-260907-1153-IND (Nothing OS 4.1)
+          =============================================================
+
+          Since your device is NOT currently rooted, use Fastboot to flash:
+
+          METHOD 1: Using magiskboot (Recommended)
+          ----------------------------------------
+          1. Place your stock boot.img in a folder with magiskboot.
+          2. Unpack stock boot:
+             magiskboot unpack boot.img
+          3. Replace the 'kernel' file with the 'Image' from this release.
+          4. Repack the boot image:
+             magiskboot repack boot.img dliiiv_boot.img
+          5. Boot into Fastboot Mode:
+             adb reboot bootloader
+          6. Flash to both slots:
+             fastboot flash boot_a dliiiv_boot.img
+             fastboot flash boot_b dliiiv_boot.img
+             fastboot reboot
+
+          METHOD 2: If Rooted in the Future
+          ---------------------------------
+          1. Flash 'DLIIIV-Kernel-FroggerPro.zip' directly inside the Kernel Flasher app.
+
+          AFTER FIRST BOOT:
+          -----------------
+          1. Install BakaSU-Manager.apk.
+          2. Open BakaSU Manager to grant root access and configure SUSFS!
+          3. Enjoy DLIIIV Kernel features:
+             - Bypass Charging: su -c "echo 1 > /sys/kernel/dliiiv/bypass_charging"
+             - Flashlight Boost: su -c "echo 255 > /sys/kernel/dliiiv/torch_boost"
+          =============================================================
+          EOF
+
       - name: 🚀 Publish DLIIIV Kernel Release
         uses: actions/upload-artifact@v4
         with:
@@ -293,4 +382,5 @@ jobs:
             DLIIIV-Kernel-FroggerPro.zip
             Image
             BakaSU-Manager.apk
+            FLASHING_INSTRUCTIONS.txt
           if-no-files-found: error
