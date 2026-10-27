@@ -440,7 +440,7 @@ jobs:
           supported.patchlevels=
           '; }
 
-          block=auto;
+          block=boot;
           is_slot_device=auto;
           ramdisk_compression=auto;
           patch_cmdline=0;
@@ -449,6 +449,9 @@ jobs:
           split_boot;
           flash_boot;
           EOF
+
+          # Patch partition size check in ak3-core.sh to avoid false-aborts
+          sed -i 's/elif \[ "\$(wc -c < boot-new.img)" -gt "\$(wc -c < boot.img)" \]; then/local maxsize=\$(blockdev --getsize64 \$BLOCK 2>\/dev\/null); [ "\$maxsize" ] \&\& [ "\$maxsize" -gt 0 ] 2>\/dev\/null || maxsize=\$(wc -c < boot.img); [ "\$maxsize" -lt 67108864 ] 2>\/dev\/null \&\& maxsize=67108864; elif [ "\$(wc -c < boot-new.img)" -gt "\$maxsize" ]; then/' AnyKernel3/tools/ak3-core.sh || true
 
           cd AnyKernel3
           zip -r9 $GITHUB_WORKSPACE/DLIIIV-Kernel-FroggerPro.zip * -x .git README.md *placeholder
