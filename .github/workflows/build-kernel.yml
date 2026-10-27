@@ -124,7 +124,35 @@ jobs:
 
           sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning Using BakaSU tree)/' BakaSU/kernel/Kbuild || true
           sed -i '/susfs has NOT update with latest KernelSU source/,$d' BakaSU/kernel/tools/susfs_compat.mk 2>/dev/null || true
-          echo "[+] BakaSU driver integrated."
+
+          # Hardfix SUSFS symbol linkage: ensure global export of my_write_context, my_write_access, my_setprocattr & preinit stubs
+          TARGET_HIDE="BakaSU/kernel/feature/selinux_hide.c"
+          perl -0777 -pi -e 's/#ifdef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE\s*#define __maybe_static\s*#else\s*#define __maybe_static static\s*#endif/#define __maybe_static/s' "$TARGET_HIDE"
+          sed -i 's/#define ksu_handle_selinux_setprocattr my_setprocattr/\/\* #define ksu_handle_selinux_setprocattr my_setprocattr \*\//' "$TARGET_HIDE"
+
+          cat << 'EOF' >> "$TARGET_HIDE"
+
+// --- SUSFS / BakaSU Kernel Linkage Bridge ---
+struct user_arg_ptr;
+
+int my_setprocattr(const char *name, void *value, size_t size)
+{
+    return ksu_handle_selinux_setprocattr(name, value, size);
+}
+
+int ksu_setup_preinit_file(struct filename **filename_ptr, struct user_arg_ptr *argv_user)
+{
+    return -EINVAL;
+}
+
+int ksu_preinit_handle_post_execveat(int *fd, struct filename **filename_ptr,
+                                     void *argv_user, void *envp_user,
+                                     int *flags, int *retval, int *preinit_fd)
+{
+    return 0;
+}
+EOF
+          echo "[+] BakaSU driver integrated and SUSFS bridge symbols installed."
 
       - name: 🥷 Integrate SUSFS (susfs4ksu) Stealth Patches
         run: |
