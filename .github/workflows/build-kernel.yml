@@ -39,8 +39,6 @@ jobs:
           echo "  Root Solution:       BakaSU (Official Release & Spoofed)"
           echo "  Stealth Hiding:      SUSFS (4a4cb1b)"
           echo "  NoMount VFS:         NoMount (e240bb0)"
-          echo "  Baseband Guard:      Baseband Guard (fa76c90 / LSM)"
-          echo "  Containerization:    DroidSpaces-OSS (700c356)"
           echo "  Networking:          BBRv3 / TCP NoDelay / CAKE / IPSet"
           echo "  Fast NT Sync:        NTSync (CONFIG_NTSYNC=y)"
           echo "  Security Patches:    Ptrace Leak Fix + Unicode Fix"
@@ -188,43 +186,6 @@ jobs:
           )
           echo "[+] NoMount integrated successfully."
 
-      - name: 📡 Integrate Baseband Guard (BBG LSM Module)
-        run: |
-          cd kernel
-          echo "[+] Installing Baseband-guard LSM..."
-          curl -fsSL https://raw.githubusercontent.com/vc-teahouse/Baseband-guard/main/setup.sh | bash
-          
-          # Add baseband_guard to default LSM list in security/Kconfig
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
-          
-          # Apply optional efisp exploit flash compatibility patch if present
-          if [ -f "$GITHUB_WORKSPACE/kernel/kp/common/bbg/0001-Enable-abl-and-efisp-flashing-for-efisp-exploit-devices.patch" ]; then
-            cd Baseband-guard
-            patch -p1 --forward < "$GITHUB_WORKSPACE/kernel/kp/common/bbg/0001-Enable-abl-and-efisp-flashing-for-efisp-exploit-devices.patch" || true
-            cd ..
-          fi
-          echo "[+] Baseband Guard integrated."
-
-      - name: 📦 Integrate DroidSpaces-OSS Kernel Patches (pinned to 700c356)
-        run: |
-          cd kernel
-          echo "[+] Cloning DroidSpaces-OSS at commit 700c3564005dd1c57427d9a25e193442a693fca7..."
-          git clone https://github.com/ravindu644/Droidspaces-OSS.git Droidspaces-OSS
-          cd Droidspaces-OSS
-          git checkout 700c3564005dd1c57427d9a25e193442a693fca7
-          cd ..
-
-          cd common
-          echo "[+] Applying SYSVIPC kABI preservation patch for GKI 6.6..."
-          patch -p1 --forward < ../Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch || true
-          
-          echo "[+] Applying USER_NS security guard patch..."
-          if [ -f ../kp/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch ]; then
-            patch -p1 --forward < ../kp/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch || true
-          fi
-          cd ..
-          echo "[+] DroidSpaces-OSS patches applied."
-
       - name: 🌐 Integrate Advanced Networking & BBRv3
         if: ${{ inputs.include_bbr }}
         run: |
@@ -322,20 +283,6 @@ jobs:
 
           # NoMount VFS Configuration
           CONFIG_NOMOUNT=y
-
-          # Baseband Guard Configuration
-          CONFIG_BBG=y
-
-          # DroidSpaces-OSS Configuration
-          CONFIG_SYSVIPC=y
-          CONFIG_POSIX_MQUEUE=y
-          CONFIG_IPC_NS=y
-          CONFIG_PID_NS=y
-          CONFIG_DEVTMPFS=y
-          CONFIG_BINFMT_MISC=y
-          CONFIG_BINFMT_SCRIPT=y
-          CONFIG_BINFMT_ELF=y
-          CONFIG_USER_NS=y
 
           # Advanced Networking & Congestion Control
           CONFIG_TCP_CONG_ADVANCED=y
@@ -505,8 +452,6 @@ jobs:
           * Root Solution:       BakaSU Kernel Hook Engine
           * Stealth Hiding:      SUSFS (4a4cb1b)
           * VFS Root Hiding:     NoMount (e240bb0)
-          * Baseband Protection: Baseband Guard (fa76c90 / LSM)
-          * Containers:          DroidSpaces-OSS (700c356) with SYSVIPC kABI preservation
           * Networking:          BBRv3 Congestion Control, TCP NoDelay, CAKE, IPSet, Wireguard
           * NT Synchronization:  NTSync (Fast Windows NT synchronization primitives)
           * Anti-Detection:      Ptrace Zygote PID Leak Fix + Unicode Normalization Bypass Fix
