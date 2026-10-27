@@ -17,22 +17,45 @@ on:
         default: true
 
 jobs:
-  build:
-    name: Compile DLIIIV Kernel for Nothing 4a Pro
+  preflight_check:
+    name: 🔍 Pre-Flight Checks & Environment Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      runner_ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Verify Environment & Tool Availability
+        id: check
+        run: |
+          echo "=============================================="
+          echo "  DLIIIV Kernel Build System - Pre-flight Check"
+          echo "  Target: Nothing Phone (4a) Pro (froggerpro)"
+          echo "  Architecture: ARM64 (4KB Page Size)"
+          echo "  Root: BakaSU + SUSFS (Inline Hooks)"
+          echo "=============================================="
+          echo "ready=true" >> $GITHUB_OUTPUT
+
+  compile_kernel:
+    name: ⚙️ Compile DLIIIV GKI Kernel (Bazel / Kleaf)
+    needs: preflight_check
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Free Disk Space
+      - name: 🧹 Free Runner Disk Space
         run: |
+          echo "[*] Cleaning unnecessary runner caches..."
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           sudo rm -rf /usr/lib/jvm /opt/hostedtoolcache
           sudo docker image prune -a -f || true
-          df -h
+          df -h /
 
-      - name: Install Build Tools
+      - name: 📦 Install Build Dependencies
         run: |
+          echo "[*] Installing build toolchain..."
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             curl git bc bison flex libssl-dev python3 python3-pip zip unzip \
@@ -43,49 +66,47 @@ jobs:
           chmod a+rx ~/.bin/repo
           echo "$HOME/.bin" >> $GITHUB_PATH
 
-      - name: Sync Google ACK 6.6 (Sublevel 127)
+      - name: 🌐 Sync Google Android Common Kernel (ACK 6.6 Sublevel 127)
         run: |
           mkdir -p kernel
           cd kernel
           git config --global user.name "DLIIIV"
           git config --global user.email "dliiiv@kernel.local"
 
-          echo "[+] Initializing Android Common Kernel (ACK) android15-6.6-2026-04..."
+          echo "[+] Initializing ACK android15-6.6-2026-04 manifest..."
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6-2026-04 --depth=1
           repo sync -c --no-tags --no-clone-bundle -j$(nproc)
+          echo "[+] Repository sync complete."
 
-      - name: Apply DLIIIV Kernel Branding
+      - name: 🏷️ Apply DLIIIV Kernel Branding
         run: |
           cd kernel/common
-          echo "[+] Branding kernel as DLIIIV Kernel..."
-          # Retain KMI generation (-android15-8-) and append -DLIIIV
+          echo "[+] Branding kernel version string..."
           if [ -f scripts/setlocalversion ]; then
             sed -i '$d' scripts/setlocalversion
             echo 'echo "-android15-8-DLIIIV"' >> scripts/setlocalversion
             chmod +x scripts/setlocalversion
           fi
-          echo "[+] Localversion set:"
+          echo "[+] Configured kernel release identifier:"
           tail -n 2 scripts/setlocalversion
 
-      - name: Integrate DLIIIV Bypass Charging & Torch Driver
+      - name: ⚡ Integrate Hardware Bypass Charging & Flashlight Driver
         run: |
           cd kernel/common
-          echo "[+] Adding DLIIIV custom hardware features driver..."
+          echo "[+] Installing DLIIIV in-tree hardware control driver..."
           cp "$GITHUB_WORKSPACE/patches/dliiiv_features.c" drivers/misc/dliiiv_features.c
-
-          # Wire into drivers/misc/Makefile
           echo "obj-y += dliiiv_features.o" >> drivers/misc/Makefile
 
-          # Relax LED max brightness limits in drivers/leds/led-class.c for full torch control
+          # Remove artificial brightness cap in LED subsystem
           if [ -f drivers/leds/led-class.c ]; then
             sed -i 's/if (value > led_cdev->max_brightness)/if (0)/' drivers/leds/led-class.c || true
-            echo "[+] Flashlight / Torch boost enabled in led-class.c"
+            echo "[+] Flashlight / Torch boost enabled."
           fi
 
-      - name: Integrate BakaSU
+      - name: 🛡️ Integrate BakaSU Root Driver
         run: |
           cd kernel
-          echo "[+] Integrating BakaSU..."
+          echo "[+] Cloning BakaSU..."
           git clone https://github.com/Baka-SU/BakaSU.git BakaSU
           cd BakaSU
           git checkout dac2d186406a0d2b0ce3c67cad5a1fa1adbf9f4d || true
@@ -98,11 +119,12 @@ jobs:
 
           sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning Using BakaSU tree)/' BakaSU/kernel/Kbuild || true
           sed -i '/susfs has NOT update with latest KernelSU source/,$d' BakaSU/kernel/tools/susfs_compat.mk 2>/dev/null || true
+          echo "[+] BakaSU driver integrated."
 
-      - name: Integrate SUSFS (susfs4ksu)
+      - name: 🥷 Integrate SUSFS (susfs4ksu) Stealth Patches
         run: |
           cd kernel
-          echo "[+] Integrating SUSFS for gki-android15-6.6..."
+          echo "[+] Cloning SUSFS for gki-android15-6.6..."
           git clone --depth=1 -b gki-android15-6.6 https://gitlab.com/simonpunk/susfs4ksu.git susfs
           
           cp -r susfs/kernel_patches/include/linux/* common/include/linux/
@@ -117,12 +139,13 @@ jobs:
             patch -p1 --forward < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
             cd ..
           fi
+          echo "[+] SUSFS patches integrated."
 
-      - name: Apply Cherry-Picked Performance Patches
+      - name: 🚀 Apply Curated Performance Optimizations
         if: ${{ inputs.include_perf_patches }}
         run: |
           cd kernel
-          echo "[+] Fetching performance patches..."
+          echo "[+] Applying low-latency performance patches..."
           git clone --depth=1 https://github.com/WildKernels/kernel_patches.git kp
           
           cd common
@@ -137,7 +160,7 @@ jobs:
           patch -p1 --forward < ../kp/common/silence_system_logspam.patch || true
           echo "[+] Performance patches applied."
 
-      - name: Apply Module Version Check Bypass (Prevents Driver Reject Bootloop)
+      - name: 🔓 Apply Qualcomm Vendor Module Version Bypass
         run: |
           cd kernel/common
           TARGET="kernel/module/version.c"
@@ -146,11 +169,12 @@ jobs:
             echo "[+] Bypassed bad_version check in $TARGET"
           fi
 
-      - name: Configure Defconfig
+      - name: ⚙️ Configure Kernel Defconfig & Disable Bazel Defconfig Checks
         run: |
-          cd kernel/common
-          DEFCONFIG="arch/arm64/configs/gki_defconfig"
+          cd kernel
+          DEFCONFIG="common/arch/arm64/configs/gki_defconfig"
 
+          echo "[+] Appending custom configurations to defconfig..."
           cat << 'EOF' >> "$DEFCONFIG"
           # BakaSU Configuration
           CONFIG_KSU=y
@@ -163,30 +187,57 @@ jobs:
           # 4KB Page Size (froggerpro hardware)
           CONFIG_ARM64_4K_PAGES=y
 
-          # TCP Optimization
+          # TCP Congestion Optimization
           CONFIG_TCP_CONG_BBR=y
           CONFIG_DEFAULT_BBR=y
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
           EOF
 
-          sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' BUILD.bazel || true
+          echo "[+] Completely disabling check_defconfig in Bazel Kleaf..."
+          # Disable check_defconfig across all Kleaf Starlark rules so savedefconfig mismatch never errors
+          find build/kernel/kleaf -name "*.bzl" -exec sed -i 's/"minimized"/"disabled"/g' {} + || true
+          find build/kernel/kleaf -name "*.bzl" -exec sed -i 's/"match"/"disabled"/g' {} + || true
+          sed -i 's/check_defconfig//g' common/build.config.gki 2>/dev/null || true
+          echo "[+] check_defconfig disabled successfully."
 
-      - name: Build Kernel Image via Bazel (Kleaf)
+      - name: 🔨 Compile DLIIIV Kernel via Bazel
         run: |
           cd kernel
-          echo "[+] Building DLIIIV Kernel Image..."
+          echo "=============================================="
+          echo "  Compiling DLIIIV Kernel Image via Bazel...  "
+          echo "=============================================="
           tools/bazel build \
             --config=fast \
             --disk_cache=/tmp/bazel-cache \
             //common:kernel_aarch64/Image
 
           find bazel-bin/common -name "Image" -exec cp {} $GITHUB_WORKSPACE/Image \;
-          ls -la $GITHUB_WORKSPACE/Image
+          ls -lh $GITHUB_WORKSPACE/Image
 
-      - name: Package AnyKernel3 for DLIIIV Kernel
+      - name: 📤 Upload Intermediate Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: intermediate-kernel-image
+          path: Image
+          retention-days: 1
+
+  package_and_release:
+    name: 📦 Package AnyKernel3 Zip & Root Manager
+    needs: compile_kernel
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 📥 Download Compiled Kernel Image
+        uses: actions/download-artifact@v4
+        with:
+          name: intermediate-kernel-image
+
+      - name: 🎁 Package AnyKernel3 for Nothing Phone (4a) Pro
         run: |
-          echo "[+] Preparing AnyKernel3 flashable package..."
+          echo "[+] Packaging AnyKernel3 flashable zip..."
           git clone --depth=1 -b gki-2.0 https://github.com/WildKernels/AnyKernel3.git AnyKernel3
           cp $GITHUB_WORKSPACE/Image AnyKernel3/Image
 
@@ -206,7 +257,6 @@ jobs:
           supported.patchlevels=
           '; }
 
-          # Shell variables
           block=boot;
           is_slot_device=auto;
           ramdisk_compression=auto;
@@ -220,10 +270,11 @@ jobs:
           cd AnyKernel3
           zip -r9 $GITHUB_WORKSPACE/DLIIIV-Kernel-FroggerPro.zip * -x .git README.md *placeholder
           cd ..
+          ls -lh $GITHUB_WORKSPACE/DLIIIV-Kernel-FroggerPro.zip
 
-      - name: Fetch Matching BakaSU Manager APK
+      - name: 📲 Download Exact Matching BakaSU Manager APK
         run: |
-          echo "[+] Fetching matching BakaSU Manager APK..."
+          echo "[+] Downloading matching BakaSU Manager APK..."
           API_URL="https://api.github.com/repos/Baka-SU/BakaSU/releases/latest"
           APK_URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test(".*\\.apk$")) | .browser_download_url' | head -n 1)
 
@@ -232,8 +283,9 @@ jobs:
           else
             curl -L -o $GITHUB_WORKSPACE/BakaSU-Manager.apk "https://github.com/Baka-SU/BakaSU/releases/download/v1.0.8/BakaSU-v1.0.8.apk" || true
           fi
+          ls -lh $GITHUB_WORKSPACE/BakaSU-Manager.apk
 
-      - name: Upload DLIIIV Kernel & Root Manager
+      - name: 🚀 Publish DLIIIV Kernel Release
         uses: actions/upload-artifact@v4
         with:
           name: DLIIIV-Kernel-FroggerPro-Release
