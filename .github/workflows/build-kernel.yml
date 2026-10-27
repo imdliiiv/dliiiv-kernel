@@ -2,7 +2,7 @@ name: Build DLIIIV Custom Kernel (FroggerPro)
 
 permissions:
   contents: write
-  actions: write
+  actions: read
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         type: boolean
         default: true
       include_bbr:
-        description: "Enable BBR TCP Congestion Control"
+        description: "Enable BBRv3 TCP Congestion Control"
         type: boolean
         default: true
 
@@ -36,8 +36,16 @@ jobs:
           echo "  Baseband Platform:   Qualcomm PAKALA"
           echo "  Kernel Base:         Google ACK 6.6 (Sublevel 127)"
           echo "  Page Size:           4KB Pages (CONFIG_ARM64_4K_PAGES=y)"
-          echo "  Root Solution:       BakaSU (Metamodule Engine)"
-          echo "  Stealth Hiding:      SUSFS (susfs4ksu Inline Hooks)"
+          echo "  Root Solution:       BakaSU (Official Release & Spoofed)"
+          echo "  Stealth Hiding:      SUSFS (4a4cb1b)"
+          echo "  NoMount VFS:         NoMount (e240bb0)"
+          echo "  Baseband Guard:      Baseband Guard (fa76c90 / LSM)"
+          echo "  Containerization:    DroidSpaces-OSS (700c356)"
+          echo "  Networking:          BBRv3 / TCP NoDelay / CAKE / IPSet"
+          echo "  Fast NT Sync:        NTSync (CONFIG_NTSYNC=y)"
+          echo "  Security Patches:    Ptrace Leak Fix + Unicode Fix"
+          echo "  BPF Subsystem:       BTF + eBPF + FUSE-BPF"
+          echo "  Performance Tuning:  user_perf Low-Latency Memory & CPU"
           echo "  Bypass Charging:     /sys/kernel/dliiiv/bypass_charging"
           echo "  Flashlight Boost:    /sys/kernel/dliiiv/torch_boost"
           echo "=========================================================="
@@ -108,7 +116,16 @@ jobs:
             echo "[+] Flashlight / Torch boost enabled."
           fi
 
-      - name: 🛡️ Integrate BakaSU Root Driver
+      - name: 📥 Clone Upstream Kernel Patches (WildKernels fa76c90)
+        run: |
+          cd kernel
+          echo "[+] Cloning WildKernels kernel_patches at fa76c90e2cb284e6ce22b0b008ad4dd19820dbb1..."
+          git clone https://github.com/WildKernels/kernel_patches.git kp
+          cd kp
+          git checkout fa76c90e2cb284e6ce22b0b008ad4dd19820dbb1
+          cd ..
+
+      - name: 🛡️ Integrate BakaSU Root Driver & SUSFS Linkage Bridge
         run: |
           cd kernel
           echo "[+] Cloning BakaSU..."
@@ -135,11 +152,14 @@ jobs:
           cat "$GITHUB_WORKSPACE/patches/susfs_bridge.c" >> "$TARGET_HIDE"
           echo "[+] BakaSU driver integrated and SUSFS bridge symbols installed."
 
-      - name: 🥷 Integrate SUSFS (susfs4ksu) Stealth Patches
+      - name: 🥷 Integrate SUSFS (susfs4ksu pinned to 4a4cb1b)
         run: |
           cd kernel
-          echo "[+] Cloning SUSFS for gki-android15-6.6..."
-          git clone --depth=1 -b gki-android15-6.6 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          echo "[+] Cloning SUSFS and checking out commit 4a4cb1be85a4694372d3efb9420de69982eac29a..."
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          cd susfs
+          git checkout 4a4cb1be85a4694372d3efb9420de69982eac29a
+          cd ..
           
           cp -r susfs/kernel_patches/include/linux/* common/include/linux/
           cp -r susfs/kernel_patches/fs/* common/fs/
@@ -147,20 +167,96 @@ jobs:
           cd common
           patch -p1 --forward < ../susfs/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
           cd ..
+          echo "[+] SUSFS 4a4cb1b successfully integrated."
 
-          # Note: BakaSU natively includes full SUSFS integration out-of-the-box.
-          # Applying 10_enable_susfs_for_ksu.patch would duplicate symbols (susfs_ksu_sid, etc.),
-          # so we only apply the kernel-side patch (50_add_susfs_in_gki-android15-6.6.patch) above.
-          echo "[+] SUSFS kernel-side infrastructure and BakaSU native hooks ready."
-
-      - name: 🚀 Apply Curated Performance Optimizations
-        if: ${{ inputs.include_perf_patches }}
+      - name: 📁 Integrate NoMount VFS Hooks (pinned to e240bb0)
         run: |
           cd kernel
-          echo "[+] Applying low-latency performance patches..."
-          git clone --depth=1 https://github.com/WildKernels/kernel_patches.git kp
+          echo "[+] Integrating NoMount at commit e240bb031820fd3f7de5dadb007281b33bb70634..."
+          KERNEL_DIR="$(pwd)/common"
+          if [ ! -d "$KERNEL_DIR/NoMount" ]; then
+            git clone --no-checkout https://github.com/maxsteeel/nomount.git "$KERNEL_DIR/NoMount"
+          fi
+          git -C "$KERNEL_DIR/NoMount" fetch --depth=1 origin e240bb031820fd3f7de5dadb007281b33bb70634
+          git -C "$KERNEL_DIR/NoMount" checkout --detach --quiet e240bb031820fd3f7de5dadb007281b33bb70634
+
+          curl -fsSL https://raw.githubusercontent.com/maxsteeel/nomount/e240bb031820fd3f7de5dadb007281b33bb70634/kernel/setup.sh -o /tmp/nomount_setup.sh
+          chmod +x /tmp/nomount_setup.sh
+          (
+            cd "$KERNEL_DIR"
+            /tmp/nomount_setup.sh e240bb031820fd3f7de5dadb007281b33bb70634
+          )
+          echo "[+] NoMount integrated successfully."
+
+      - name: 📡 Integrate Baseband Guard (BBG LSM Module)
+        run: |
+          cd kernel
+          echo "[+] Installing Baseband-guard LSM..."
+          curl -fsSL https://raw.githubusercontent.com/vc-teahouse/Baseband-guard/main/setup.sh | bash
           
+          # Add baseband_guard to default LSM list in security/Kconfig
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
+          
+          # Apply optional efisp exploit flash compatibility patch if present
+          if [ -f "$GITHUB_WORKSPACE/kernel/kp/common/bbg/0001-Enable-abl-and-efisp-flashing-for-efisp-exploit-devices.patch" ]; then
+            cd Baseband-guard
+            patch -p1 --forward < "$GITHUB_WORKSPACE/kernel/kp/common/bbg/0001-Enable-abl-and-efisp-flashing-for-efisp-exploit-devices.patch" || true
+            cd ..
+          fi
+          echo "[+] Baseband Guard integrated."
+
+      - name: 📦 Integrate DroidSpaces-OSS Kernel Patches (pinned to 700c356)
+        run: |
+          cd kernel
+          echo "[+] Cloning DroidSpaces-OSS at commit 700c3564005dd1c57427d9a25e193442a693fca7..."
+          git clone https://github.com/ravindu644/Droidspaces-OSS.git Droidspaces-OSS
+          cd Droidspaces-OSS
+          git checkout 700c3564005dd1c57427d9a25e193442a693fca7
+          cd ..
+
           cd common
+          echo "[+] Applying SYSVIPC kABI preservation patch for GKI 6.6..."
+          patch -p1 --forward < ../Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch || true
+          
+          echo "[+] Applying USER_NS security guard patch..."
+          if [ -f ../kp/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch ]; then
+            patch -p1 --forward < ../kp/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch || true
+          fi
+          cd ..
+          echo "[+] DroidSpaces-OSS patches applied."
+
+      - name: 🌐 Integrate Advanced Networking & BBRv3
+        if: ${{ inputs.include_bbr }}
+        run: |
+          cd kernel/common
+          echo "[+] Applying BBRv3 TCP Congestion Control patch for ACK 6.6..."
+          patch -p1 --forward < ../kp/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android15-6.6.patch || true
+          patch -p1 --forward < ../kp/common/force_tcp_nodelay.patch || true
+          echo "[+] Networking patches applied."
+
+      - name: ⚡ Integrate NTSync Kernel Driver
+        run: |
+          cd kernel/common
+          echo "[+] Applying NTSync compat and base patches..."
+          patch -p1 --forward < ../kp/common/ntsync/ntsync_compat_android15-6.6.patch || true
+          patch -p1 --forward < ../kp/common/ntsync/ntsync_base.patch || true
+          echo "[+] NTSync driver integrated."
+
+      - name: 🔒 Apply Ptrace Leak & Unicode Normalization Fixes
+        run: |
+          cd kernel/common
+          echo "[+] Applying Unicode normalization bypass fix..."
+          patch -p1 --forward < ../kp/common/unicode_bypass_fix_6.1+.patch || true
+
+          echo "[+] Applying ptrace zygote PID leak protection..."
+          patch -p1 --forward < ../kp/gki_ptrace.patch || true
+          echo "[+] Fixes applied."
+
+      - name: 🚀 Apply Curated Performance Optimizations (user_perf)
+        if: ${{ inputs.include_perf_patches }}
+        run: |
+          cd kernel/common
+          echo "[+] Applying low-latency memory, scheduler, and F2FS performance patches..."
           patch -p1 --forward < ../kp/common/optimized_mem_operations.patch || true
           patch -p1 --forward < ../kp/common/file_struct_8bytes_align.patch || true
           patch -p1 --forward < ../kp/common/reduce_cache_pressure.patch || true
@@ -172,7 +268,6 @@ jobs:
           patch -p1 --forward < ../kp/common/optimise_memcmp.patch || true
           patch -p1 --forward < ../kp/common/increase_ext4_default_commit_age.patch || true
           patch -p1 --forward < ../kp/common/minimise_wakeup_time.patch || true
-          patch -p1 --forward < ../kp/common/force_tcp_nodelay.patch || true
           patch -p1 --forward < ../kp/common/silence_irq_cpu_logspam.patch || true
           patch -p1 --forward < ../kp/common/silence_system_logspam.patch || true
           echo "[+] Performance patches applied."
@@ -225,11 +320,60 @@ jobs:
           # 4KB Page Size (froggerpro hardware)
           CONFIG_ARM64_4K_PAGES=y
 
-          # TCP Congestion Optimization
+          # NoMount VFS Configuration
+          CONFIG_NOMOUNT=y
+
+          # Baseband Guard Configuration
+          CONFIG_BBG=y
+
+          # DroidSpaces-OSS Configuration
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_BINFMT_MISC=y
+          CONFIG_BINFMT_SCRIPT=y
+          CONFIG_BINFMT_ELF=y
+          CONFIG_USER_NS=y
+
+          # Advanced Networking & Congestion Control
+          CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_BBR3=y
           CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_NET_ACT_CONNMARK=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP6_NF_NAT=y
+          CONFIG_IP6_NF_TARGET_MASQUERADE=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_WIREGUARD=y
+
+          # NTSync Configuration
+          CONFIG_NTSYNC=y
+
+          # BTF, eBPF & FUSE-BPF
+          CONFIG_DEBUG_INFO_BTF=y
+          CONFIG_BPF_SYSCALL=y
+          CONFIG_BPF_JIT=y
+          CONFIG_BPF_JIT_ALWAYS_ON=y
+          CONFIG_FUSE_BPF=y
+
+          # Performance Optimizations (user_perf)
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
           EOF
 
           echo "[+] Completely disabling check_defconfig in Bazel Kleaf..."
@@ -261,7 +405,7 @@ jobs:
           retention-days: 1
 
   package_artifacts:
-    name: 📦 3. Package AnyKernel3 & Fastboot Tools
+    name: 📦 3. Package AnyKernel3 Flashable Zip
     needs: compile_kernel
     runs-on: ubuntu-24.04
     steps:
@@ -318,83 +462,72 @@ jobs:
           retention-days: 1
 
   publish_release:
-    name: 🚀 4. Bundle Root Manager & Final Release
+    name: 🚀 4. Bundle BakaSU Managers & Release Flashable Zip
     needs: [compile_kernel, package_artifacts]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
-      - name: 📥 Download Kernel Image
-        uses: actions/download-artifact@v8
-        with:
-          name: intermediate-kernel-image
-
       - name: 📥 Download Flashable Package
         uses: actions/download-artifact@v8
         with:
           name: dliiiv-kernel-zip
 
-      - name: 📲 Download Exact Matching BakaSU Manager APK
+      - name: 📲 Download Both Official Release & Spoofed BakaSU Managers
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[+] Fetching official BakaSU Manager APK..."
-          RELEASES_JSON=$(curl -s "https://api.github.com/repos/Baka-SU/BakaSU/releases")
-          APK_URL=$(echo "$RELEASES_JSON" | jq -r '.[0].assets[] | select(.name | test(".*arm64-v8a.*\\.apk$")) | .browser_download_url' | head -n 1)
+          echo "[+] Running automated BakaSU manager downloader..."
+          python3 "$GITHUB_WORKSPACE/scripts/download_managers.py"
+          ls -lh "$GITHUB_WORKSPACE/BakaSU-Manager-Release.apk" "$GITHUB_WORKSPACE/BakaSU-Manager-Spoofed.apk"
 
-          if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
-            APK_URL=$(echo "$RELEASES_JSON" | jq -r '.[0].assets[] | select(.name | test(".*\\.apk$")) | .browser_download_url' | head -n 1)
-          fi
-
-          if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
-            APK_URL="https://github.com/Baka-SU/BakaSU/releases/download/v4.2.0-rc3/ReSukiSU_v4.2.0-rc3_35171-arm64-v8a-release.apk"
-          fi
-
-          echo "[+] Downloading from: $APK_URL"
-          curl -L -f -o "$GITHUB_WORKSPACE/BakaSU-Manager.apk" "$APK_URL"
-          FILE_SIZE=$(stat -c%s "$GITHUB_WORKSPACE/BakaSU-Manager.apk")
-          echo "[+] Downloaded BakaSU Manager: $FILE_SIZE bytes"
-          if [ "$FILE_SIZE" -lt 1000000 ]; then
-            echo "[-] Error: APK size is unexpectedly small ($FILE_SIZE bytes). Aborting to prevent invalid bundle."
-            exit 1
-          fi
-          ls -lh $GITHUB_WORKSPACE/BakaSU-Manager.apk
-
-      - name: 📝 Create Flashing Guide for Fastboot
+      - name: 📝 Create DLIIIV Kernel Release Notes & Flashing Guide
         run: |
-          cat << 'EOF' > $GITHUB_WORKSPACE/FLASHING_INSTRUCTIONS.txt
+          cat << 'EOF' > $GITHUB_WORKSPACE/README.txt
           =============================================================
-            DLIIIV Custom Kernel Flashing Guide for Nothing Phone (4a) Pro
-            Firmware: FroggerPro-B4.1-260907-1153-IND (Nothing OS 4.1)
+            DLIIIV Custom Kernel for Nothing Phone (4a) Pro (froggerpro / A069P)
+            Firmware: FroggerPro-B4.1-260907-1153-IND (Nothing OS 4.1 / Android 16)
           =============================================================
 
-          Since your device is NOT currently rooted, use Fastboot to flash:
-
-          METHOD 1: Using magiskboot (Recommended)
-          ----------------------------------------
-          1. Place your stock boot.img in a folder with magiskboot.
-          2. Unpack stock boot:
-             magiskboot unpack boot.img
-          3. Replace the 'kernel' file with the 'Image' from this release.
-          4. Repack the boot image:
-             magiskboot repack boot.img dliiiv_boot.img
-          5. Boot into Fastboot Mode:
-             adb reboot bootloader
-          6. Flash to both slots:
-             fastboot flash boot_a dliiiv_boot.img
-             fastboot flash boot_b dliiiv_boot.img
-             fastboot reboot
-
-          METHOD 2: If Rooted in the Future
+          INCLUDED IN THIS RELEASE PACKAGE:
           ---------------------------------
-          1. Flash 'DLIIIV-Kernel-FroggerPro.zip' directly inside the Kernel Flasher app.
+          1. DLIIIV-Kernel-FroggerPro.zip  -> AnyKernel3 flashable zip for recovery or Kernel Flasher
+          2. BakaSU-Manager-Release.apk   -> Official modern BakaSU root manager
+          3. BakaSU-Manager-Spoofed.apk   -> Spoofed package name BakaSU manager for maximum stealth
+
+          ENABLED KERNEL FEATURES:
+          ------------------------
+          * Root Solution:       BakaSU Kernel Hook Engine
+          * Stealth Hiding:      SUSFS (4a4cb1b)
+          * VFS Root Hiding:     NoMount (e240bb0)
+          * Baseband Protection: Baseband Guard (fa76c90 / LSM)
+          * Containers:          DroidSpaces-OSS (700c356) with SYSVIPC kABI preservation
+          * Networking:          BBRv3 Congestion Control, TCP NoDelay, CAKE, IPSet, Wireguard
+          * NT Synchronization:  NTSync (Fast Windows NT synchronization primitives)
+          * Anti-Detection:      Ptrace Zygote PID Leak Fix + Unicode Normalization Bypass Fix
+          * Modern BPF Stack:    BTF (CONFIG_DEBUG_INFO_BTF), eBPF (CONFIG_BPF_SYSCALL), FUSE-BPF
+          * Performance Tuning:  user_perf Low-Latency Memory, Scheduler, and F2FS tweaks
+          * Hardware Controls:   Bypass Charging (/sys/kernel/dliiiv/bypass_charging)
+                                 Flashlight Boost (/sys/kernel/dliiiv/torch_boost)
+
+          HOW TO FLASH:
+          -------------
+          METHOD A: Via Kernel Flasher (If already rooted)
+          1. Open Kernel Flasher (or Franco Kernel Manager).
+          2. Flash 'DLIIIV-Kernel-FroggerPro.zip'.
+          3. Reboot system.
+
+          METHOD B: Via Recovery (TWRP / OrangeFox)
+          1. Boot into custom recovery.
+          2. Flash 'DLIIIV-Kernel-FroggerPro.zip'.
+          3. Reboot system.
 
           AFTER FIRST BOOT:
           -----------------
-          1. Install BakaSU-Manager.apk.
-          2. Open BakaSU Manager to grant root access and configure SUSFS!
-          3. Enjoy DLIIIV Kernel features:
-             - Bypass Charging: su -c "echo 1 > /sys/kernel/dliiiv/bypass_charging"
-             - Flashlight Boost: su -c "echo 255 > /sys/kernel/dliiiv/torch_boost"
+          1. Install BakaSU-Manager-Release.apk or BakaSU-Manager-Spoofed.apk.
+          2. Open the Manager app to verify Root, SUSFS, and NoMount status.
+          3. Enjoy DLIIIV Kernel!
           =============================================================
           EOF
 
@@ -404,7 +537,7 @@ jobs:
           name: DLIIIV-Kernel-FroggerPro-Release
           path: |
             DLIIIV-Kernel-FroggerPro.zip
-            Image
-            BakaSU-Manager.apk
-            FLASHING_INSTRUCTIONS.txt
+            BakaSU-Manager-Release.apk
+            BakaSU-Manager-Spoofed.apk
+            README.txt
           if-no-files-found: error
