@@ -1,0 +1,12 @@
+# Build artifacts
+*.zip
+*.apk
+*.img
+Image
+out/
+build/
+.repo/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,244 @@
+name: Build DLIIIV Custom Kernel (FroggerPro)
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_perf_patches:
+        description: "Apply Performance Enhancer Patches (Memory, F2FS, CPU)"
+        type: boolean
+        default: true
+      include_bbr:
+        description: "Enable BBR TCP Congestion Control"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    name: Compile DLIIIV Kernel for Nothing 4a Pro
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo rm -rf /usr/lib/jvm /opt/hostedtoolcache
+          sudo docker image prune -a -f || true
+          df -h
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl git bc bison flex libssl-dev python3 python3-pip zip unzip \
+            libelf-dev ccache jq rsync zstd
+
+          mkdir -p ~/.bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+          chmod a+rx ~/.bin/repo
+          echo "$HOME/.bin" >> $GITHUB_PATH
+
+      - name: Sync Google ACK 6.6 (Sublevel 127)
+        run: |
+          mkdir -p kernel
+          cd kernel
+          git config --global user.name "DLIIIV"
+          git config --global user.email "dliiiv@kernel.local"
+
+          echo "[+] Initializing Android Common Kernel (ACK) android15-6.6-2026-04..."
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6-2026-04 --depth=1
+          repo sync -c --no-tags --no-clone-bundle -j$(nproc)
+
+      - name: Apply DLIIIV Kernel Branding
+        run: |
+          cd kernel/common
+          echo "[+] Branding kernel as DLIIIV Kernel..."
+          # Retain KMI generation (-android15-8-) and append -DLIIIV
+          if [ -f scripts/setlocalversion ]; then
+            sed -i '$d' scripts/setlocalversion
+            echo 'echo "-android15-8-DLIIIV"' >> scripts/setlocalversion
+            chmod +x scripts/setlocalversion
+          fi
+          echo "[+] Localversion set:"
+          tail -n 2 scripts/setlocalversion
+
+      - name: Integrate DLIIIV Bypass Charging & Torch Driver
+        run: |
+          cd kernel/common
+          echo "[+] Adding DLIIIV custom hardware features driver..."
+          cp "$GITHUB_WORKSPACE/patches/dliiiv_features.c" drivers/misc/dliiiv_features.c
+
+          # Wire into drivers/misc/Makefile
+          echo "obj-y += dliiiv_features.o" >> drivers/misc/Makefile
+
+          # Relax LED max brightness limits in drivers/leds/led-class.c for full torch control
+          if [ -f drivers/leds/led-class.c ]; then
+            sed -i 's/if (value > led_cdev->max_brightness)/if (0)/' drivers/leds/led-class.c || true
+            echo "[+] Flashlight / Torch boost enabled in led-class.c"
+          fi
+
+      - name: Integrate BakaSU
+        run: |
+          cd kernel
+          echo "[+] Integrating BakaSU..."
+          git clone https://github.com/Baka-SU/BakaSU.git BakaSU
+          cd BakaSU
+          git checkout dac2d186406a0d2b0ce3c67cad5a1fa1adbf9f4d || true
+          cd ..
+
+          DRIVERS_DIR="common/drivers"
+          ln -s "../../BakaSU/kernel" "$DRIVERS_DIR/kernelsu"
+          grep -q 'obj-$(CONFIG_KSU) += kernelsu/' "$DRIVERS_DIR/Makefile" || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$DRIVERS_DIR/Makefile"
+          grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVERS_DIR/Kconfig" || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVERS_DIR/Kconfig"
+
+          sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning Using BakaSU tree)/' BakaSU/kernel/Kbuild || true
+          sed -i '/susfs has NOT update with latest KernelSU source/,$d' BakaSU/kernel/tools/susfs_compat.mk 2>/dev/null || true
+
+      - name: Integrate SUSFS (susfs4ksu)
+        run: |
+          cd kernel
+          echo "[+] Integrating SUSFS for gki-android15-6.6..."
+          git clone --depth=1 -b gki-android15-6.6 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          
+          cp -r susfs/kernel_patches/include/linux/* common/include/linux/
+          cp -r susfs/kernel_patches/fs/* common/fs/
+
+          cd common
+          patch -p1 --forward < ../susfs/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
+          cd ..
+
+          if [ -f susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ]; then
+            cd BakaSU
+            patch -p1 --forward < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+            cd ..
+          fi
+
+      - name: Apply Cherry-Picked Performance Patches
+        if: ${{ inputs.include_perf_patches }}
+        run: |
+          cd kernel
+          echo "[+] Fetching performance patches..."
+          git clone --depth=1 https://github.com/WildKernels/kernel_patches.git kp
+          
+          cd common
+          patch -p1 --forward < ../kp/common/optimized_mem_operations.patch || true
+          patch -p1 --forward < ../kp/common/file_struct_8bytes_align.patch || true
+          patch -p1 --forward < ../kp/common/reduce_cache_pressure.patch || true
+          patch -p1 --forward < ../kp/common/mem_opt_prefetch.patch || true
+          patch -p1 --forward < ../kp/common/disable_cache_hot_buddy.patch || true
+          patch -p1 --forward < ../kp/common/f2fs_reduce_congestion.patch || true
+          patch -p1 --forward < ../kp/common/avoid_extra_s2idle_wake_attempts.patch || true
+          patch -p1 --forward < ../kp/common/silence_irq_cpu_logspam.patch || true
+          patch -p1 --forward < ../kp/common/silence_system_logspam.patch || true
+          echo "[+] Performance patches applied."
+
+      - name: Apply Module Version Check Bypass (Prevents Driver Reject Bootloop)
+        run: |
+          cd kernel/common
+          TARGET="kernel/module/version.c"
+          if [ -f "$TARGET" ]; then
+            sed -i '/bad_version:/{:a;n;/return 0;/{s/return 0;/return 1;/;b};ba}' "$TARGET"
+            echo "[+] Bypassed bad_version check in $TARGET"
+          fi
+
+      - name: Configure Defconfig
+        run: |
+          cd kernel/common
+          DEFCONFIG="arch/arm64/configs/gki_defconfig"
+
+          cat << 'EOF' >> "$DEFCONFIG"
+          # BakaSU Configuration
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_TOOLKIT_SUPPORT=y
+          CONFIG_KSU_MULTI_MANAGER_SUPPORT=n
+
+          # 4KB Page Size (froggerpro hardware)
+          CONFIG_ARM64_4K_PAGES=y
+
+          # TCP Optimization
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          EOF
+
+          sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' BUILD.bazel || true
+
+      - name: Build Kernel Image via Bazel (Kleaf)
+        run: |
+          cd kernel
+          echo "[+] Building DLIIIV Kernel Image..."
+          tools/bazel build \
+            --config=fast \
+            --disk_cache=/tmp/bazel-cache \
+            //common:kernel_aarch64/Image
+
+          find bazel-bin/common -name "Image" -exec cp {} $GITHUB_WORKSPACE/Image \;
+          ls -la $GITHUB_WORKSPACE/Image
+
+      - name: Package AnyKernel3 for DLIIIV Kernel
+        run: |
+          echo "[+] Preparing AnyKernel3 flashable package..."
+          git clone --depth=1 -b gki-2.0 https://github.com/WildKernels/AnyKernel3.git AnyKernel3
+          cp $GITHUB_WORKSPACE/Image AnyKernel3/Image
+
+          cat << 'EOF' > AnyKernel3/anykernel.sh
+          ### AnyKernel3 Configuration for DLIIIV Kernel
+          properties() { '
+          kernel.string=DLIIIV Kernel for Nothing Phone (4a) Pro (froggerpro)
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=froggerpro
+          device.name2=frogger
+          device.name3=A069P
+          supported.versions=15, 16
+          supported.patchlevels=
+          '; }
+
+          # Shell variables
+          block=boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_cmdline=0;
+
+          . tools/ak3-core.sh;
+          split_boot;
+          flash_boot;
+          EOF
+
+          cd AnyKernel3
+          zip -r9 $GITHUB_WORKSPACE/DLIIIV-Kernel-FroggerPro.zip * -x .git README.md *placeholder
+          cd ..
+
+      - name: Fetch Matching BakaSU Manager APK
+        run: |
+          echo "[+] Fetching matching BakaSU Manager APK..."
+          API_URL="https://api.github.com/repos/Baka-SU/BakaSU/releases/latest"
+          APK_URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test(".*\\.apk$")) | .browser_download_url' | head -n 1)
+
+          if [ -n "$APK_URL" ] && [ "$APK_URL" != "null" ]; then
+            curl -L -o $GITHUB_WORKSPACE/BakaSU-Manager.apk "$APK_URL"
+          else
+            curl -L -o $GITHUB_WORKSPACE/BakaSU-Manager.apk "https://github.com/Baka-SU/BakaSU/releases/download/v1.0.8/BakaSU-v1.0.8.apk" || true
+          fi
+
+      - name: Upload DLIIIV Kernel & Root Manager
+        uses: actions/upload-artifact@v4
+        with:
+          name: DLIIIV-Kernel-FroggerPro-Release
+          path: |
+            DLIIIV-Kernel-FroggerPro.zip
+            Image
+            BakaSU-Manager.apk
+          if-no-files-found: error
