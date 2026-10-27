@@ -168,6 +168,11 @@ jobs:
           patch -p1 --forward < ../kp/common/disable_cache_hot_buddy.patch || true
           patch -p1 --forward < ../kp/common/f2fs_reduce_congestion.patch || true
           patch -p1 --forward < ../kp/common/avoid_extra_s2idle_wake_attempts.patch || true
+          patch -p1 --forward < ../kp/common/clear_page_16bytes_align.patch || true
+          patch -p1 --forward < ../kp/common/optimise_memcmp.patch || true
+          patch -p1 --forward < ../kp/common/increase_ext4_default_commit_age.patch || true
+          patch -p1 --forward < ../kp/common/minimise_wakeup_time.patch || true
+          patch -p1 --forward < ../kp/common/force_tcp_nodelay.patch || true
           patch -p1 --forward < ../kp/common/silence_irq_cpu_logspam.patch || true
           patch -p1 --forward < ../kp/common/silence_system_logspam.patch || true
           echo "[+] Performance patches applied."
@@ -332,14 +337,25 @@ jobs:
 
       - name: 📲 Download Exact Matching BakaSU Manager APK
         run: |
-          echo "[+] Downloading matching BakaSU Manager APK..."
-          API_URL="https://api.github.com/repos/Baka-SU/BakaSU/releases/latest"
-          APK_URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test(".*\\.apk$")) | .browser_download_url' | head -n 1)
+          echo "[+] Fetching official BakaSU Manager APK..."
+          RELEASES_JSON=$(curl -s "https://api.github.com/repos/Baka-SU/BakaSU/releases")
+          APK_URL=$(echo "$RELEASES_JSON" | jq -r '.[0].assets[] | select(.name | test(".*arm64-v8a.*\\.apk$")) | .browser_download_url' | head -n 1)
 
-          if [ -n "$APK_URL" ] && [ "$APK_URL" != "null" ]; then
-            curl -L -o $GITHUB_WORKSPACE/BakaSU-Manager.apk "$APK_URL"
-          else
-            curl -L -o $GITHUB_WORKSPACE/BakaSU-Manager.apk "https://github.com/Baka-SU/BakaSU/releases/download/v1.0.8/BakaSU-v1.0.8.apk" || true
+          if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
+            APK_URL=$(echo "$RELEASES_JSON" | jq -r '.[0].assets[] | select(.name | test(".*\\.apk$")) | .browser_download_url' | head -n 1)
+          fi
+
+          if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
+            APK_URL="https://github.com/Baka-SU/BakaSU/releases/download/v4.2.0-rc3/ReSukiSU_v4.2.0-rc3_35171-arm64-v8a-release.apk"
+          fi
+
+          echo "[+] Downloading from: $APK_URL"
+          curl -L -f -o "$GITHUB_WORKSPACE/BakaSU-Manager.apk" "$APK_URL"
+          FILE_SIZE=$(stat -c%s "$GITHUB_WORKSPACE/BakaSU-Manager.apk")
+          echo "[+] Downloaded BakaSU Manager: $FILE_SIZE bytes"
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+            echo "[-] Error: APK size is unexpectedly small ($FILE_SIZE bytes). Aborting to prevent invalid bundle."
+            exit 1
           fi
           ls -lh $GITHUB_WORKSPACE/BakaSU-Manager.apk
 
