@@ -427,19 +427,20 @@ jobs:
           ### AnyKernel3 Configuration for DLIIIV Kernel
           properties() { '
           kernel.string=DLIIIV Kernel for Nothing Phone (4a) Pro (froggerpro)
-          do.devicecheck=1
+          do.devicecheck=0
           do.modules=0
           do.systemless=1
           do.cleanup=1
           do.cleanuponabort=0
+          do.check_boot_version=0
           device.name1=froggerpro
           device.name2=frogger
           device.name3=A069P
-          supported.versions=15, 16
+          supported.versions=
           supported.patchlevels=
           '; }
 
-          block=boot;
+          block=auto;
           is_slot_device=auto;
           ramdisk_compression=auto;
           patch_cmdline=0;
