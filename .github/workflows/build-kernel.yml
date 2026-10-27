@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Audit Target Device Configuration
         run: |
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 🧹 Free Runner Disk Space
         run: |
@@ -241,7 +241,7 @@ jobs:
           ls -lh $GITHUB_WORKSPACE/Image
 
       - name: 📤 Upload Intermediate Kernel Image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: intermediate-kernel-image
           path: Image
@@ -253,10 +253,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 📥 Download Compiled Kernel Image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: intermediate-kernel-image
 
@@ -298,7 +298,7 @@ jobs:
           ls -lh $GITHUB_WORKSPACE/DLIIIV-Kernel-FroggerPro.zip
 
       - name: 📤 Upload Flashable Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dliiiv-kernel-zip
           path: DLIIIV-Kernel-FroggerPro.zip
@@ -310,15 +310,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 📥 Download Kernel Image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: intermediate-kernel-image
 
       - name: 📥 Download Flashable Package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dliiiv-kernel-zip
 
@@ -375,7 +375,7 @@ jobs:
           EOF
 
       - name: 🚀 Publish DLIIIV Kernel Release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DLIIIV-Kernel-FroggerPro-Release
           path: |
