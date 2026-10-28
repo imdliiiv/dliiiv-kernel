@@ -36,7 +36,7 @@ jobs:
           echo "  Baseband Platform:   Qualcomm PAKALA"
           echo "  Kernel Base:         Google ACK 6.6 (Sublevel 127)"
           echo "  Page Size:           4KB Pages (CONFIG_ARM64_4K_PAGES=y)"
-          echo "  Root Solution:       BakaSU (Official Release & Spoofed)"
+          echo "  Root Solution:       ReSukiSU v4.2.0-rc3 (1-Month-Old Official Release)"
           echo "  Stealth Hiding:      SUSFS (4a4cb1b)"
           echo "  NoMount VFS:         NoMount (e240bb0)"
           echo "  Networking:          BBRv3 / TCP NoDelay / CAKE / IPSet"
@@ -123,32 +123,30 @@ jobs:
           git checkout fa76c90e2cb284e6ce22b0b008ad4dd19820dbb1
           cd ..
 
-      - name: 🛡️ Integrate BakaSU Root Driver & SUSFS Linkage Bridge
+      - name: 🛡️ Integrate ReSukiSU Root Driver (1-Month-Old v4.2.0-rc3) & SUSFS Bridge
         run: |
           cd kernel
-          echo "[+] Cloning BakaSU..."
-          git clone https://github.com/Baka-SU/BakaSU.git BakaSU
-          cd BakaSU
-          git checkout dac2d186406a0d2b0ce3c67cad5a1fa1adbf9f4d || true
+          echo "[+] Cloning official ReSukiSU (1-month-old v4.2.0-rc3)..."
+          git clone https://github.com/ReSukiSU/ReSukiSU.git ReSukiSU
+          cd ReSukiSU
+          git checkout v4.2.0-rc3 || git checkout 239e1e8871b8fcd51a6e5b3002e0ba522fdd99fb
           cd ..
 
           DRIVERS_DIR="common/drivers"
-          ln -s "../../BakaSU/kernel" "$DRIVERS_DIR/kernelsu"
+          ln -s "../../ReSukiSU/kernel" "$DRIVERS_DIR/kernelsu"
           grep -q 'obj-$(CONFIG_KSU) += kernelsu/' "$DRIVERS_DIR/Makefile" || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$DRIVERS_DIR/Makefile"
           grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVERS_DIR/Kconfig" || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVERS_DIR/Kconfig"
 
-          sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning Using BakaSU tree)/' BakaSU/kernel/Kbuild || true
-          # Empty susfs_compat.mk so KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE is NOT defined.
-          # This keeps lines 209-648 in selinux_hide.c active and compiled!
-          echo "" > BakaSU/kernel/tools/susfs_compat.mk
+          sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning Using ReSukiSU tree)/' ReSukiSU/kernel/Kbuild || true
+          echo "" > ReSukiSU/kernel/tools/susfs_compat.mk || true
 
           # Hardfix SUSFS symbol linkage: ensure global export of all required symbols
-          TARGET_HIDE="BakaSU/kernel/feature/selinux_hide.c"
+          TARGET_HIDE="ReSukiSU/kernel/feature/selinux_hide.c"
           perl -0777 -pi -e 's/#ifdef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE\s*#define __maybe_static\s*#else\s*#define __maybe_static static\s*#endif/#define __maybe_static/s' "$TARGET_HIDE"
           sed -i 's/static ssize_t my_write_context(/ssize_t my_write_context(/' "$TARGET_HIDE"
           sed -i 's/static ssize_t my_write_access(/ssize_t my_write_access(/' "$TARGET_HIDE"
           cat "$GITHUB_WORKSPACE/patches/susfs_bridge.c" >> "$TARGET_HIDE"
-          echo "[+] BakaSU driver integrated and SUSFS bridge symbols installed."
+          echo "[+] ReSukiSU v4.2.0-rc3 driver integrated and SUSFS bridge symbols installed."
 
       - name: 🥷 Integrate SUSFS (susfs4ksu pinned to 4a4cb1b)
         run: |
@@ -270,7 +268,7 @@ jobs:
 
           echo "[+] Appending custom configurations to defconfig..."
           cat << 'EOF' >> "$DEFCONFIG"
-          # BakaSU Configuration
+          # ReSukiSU Configuration
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -413,7 +411,7 @@ jobs:
           retention-days: 1
 
   publish_release:
-    name: 🚀 4. Bundle BakaSU Managers & Release Flashable Zip
+    name: 🚀 4. Bundle ReSukiSU Managers & Release Flashable Zip
     needs: [compile_kernel, package_artifacts]
     runs-on: ubuntu-24.04
     steps:
@@ -425,13 +423,13 @@ jobs:
         with:
           name: dliiiv-kernel-zip
 
-      - name: 📲 Download Both Official Release & Spoofed BakaSU Managers
+      - name: 📲 Download Both Official Release & Spoofed ReSukiSU Managers
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[+] Running automated BakaSU manager downloader..."
+          echo "[+] Running automated ReSukiSU manager downloader..."
           python3 "$GITHUB_WORKSPACE/scripts/download_managers.py"
-          ls -lh "$GITHUB_WORKSPACE/BakaSU-Manager-Release.apk" "$GITHUB_WORKSPACE/BakaSU-Manager-Spoofed.apk"
+          ls -lh "$GITHUB_WORKSPACE/ReSukiSU-Manager-Release.apk" "$GITHUB_WORKSPACE/ReSukiSU-Manager-Spoofed.apk"
 
       - name: 📝 Create DLIIIV Kernel Release Notes & Flashing Guide
         run: |
@@ -444,12 +442,12 @@ jobs:
           INCLUDED IN THIS RELEASE PACKAGE:
           ---------------------------------
           1. DLIIIV-Kernel-FroggerPro.zip  -> AnyKernel3 flashable zip for recovery or Kernel Flasher
-          2. BakaSU-Manager-Release.apk   -> Official modern BakaSU root manager
-          3. BakaSU-Manager-Spoofed.apk   -> Spoofed package name BakaSU manager for maximum stealth
+          2. ReSukiSU-Manager-Release.apk   -> Official modern ReSukiSU root manager
+          3. ReSukiSU-Manager-Spoofed.apk   -> Spoofed package name ReSukiSU manager for maximum stealth
 
           ENABLED KERNEL FEATURES:
           ------------------------
-          * Root Solution:       BakaSU Kernel Hook Engine
+          * Root Solution:       ReSukiSU Kernel Hook Engine
           * Stealth Hiding:      SUSFS (4a4cb1b)
           * VFS Root Hiding:     NoMount (e240bb0)
           * Networking:          BBRv3 Congestion Control, TCP NoDelay, CAKE, IPSet, Wireguard
@@ -474,7 +472,7 @@ jobs:
 
           AFTER FIRST BOOT:
           -----------------
-          1. Install BakaSU-Manager-Release.apk or BakaSU-Manager-Spoofed.apk.
+          1. Install ReSukiSU-Manager-Release.apk or ReSukiSU-Manager-Spoofed.apk.
           2. Open the Manager app to verify Root, SUSFS, and NoMount status.
           3. Enjoy DLIIIV Kernel!
           =============================================================
@@ -486,7 +484,7 @@ jobs:
           name: DLIIIV-Kernel-FroggerPro-Release
           path: |
             DLIIIV-Kernel-FroggerPro.zip
-            BakaSU-Manager-Release.apk
-            BakaSU-Manager-Spoofed.apk
+            ReSukiSU-Manager-Release.apk
+            ReSukiSU-Manager-Spoofed.apk
             README.txt
           if-no-files-found: error
